@@ -1,0 +1,17 @@
+name: "perturb_cast_2023"
+output_dir: ../docs
+navbar:
+  title: "perturb_cast_2023"
+  left:
+  - text: Home
+    href: index.html
+  - text: About
+    href: about.html
+  - text: License
+    href: license.html
+output:
+  workflowr::wflow_html:
+    toc: yes
+    toc_float: yes
+    theme: cosmo
+    highlight: textmate
