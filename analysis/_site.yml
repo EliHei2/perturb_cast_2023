@@ -1,7 +1,7 @@
-name: "perturb_cast_2023"
+name: perturb_cast_2023
 output_dir: ../docs
 navbar:
-  title: "perturb_cast_2023"
+  title: perturb_cast_2023
   left:
   - text: Home
     href: index.html
@@ -9,6 +9,10 @@ navbar:
     href: about.html
   - text: License
     href: license.html
+  right:
+  - icon: fab fa-github
+    text: Source code
+    href: https://github.com/EliHei2/perturb_cast_2023
 output:
   workflowr::wflow_html:
     toc: yes
