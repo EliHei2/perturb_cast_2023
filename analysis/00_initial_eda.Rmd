@@ -1,0 +1,581 @@
+---
+title: "Initial Exprolatory Data Analysis"
+author:
+- name: Elyas Heidari & Artem Lomakin
+  affiliation: 
+  - AI in Oncology, DKFZ Heidelberg
+output:
+  workflowr::wflow_html:
+    code_folding: hide
+    toc: true
+    toc_float: true
+    number_sections: false
+---
+
+# Setup / definitions
+
+## Libraries
+
+```{r setup_knitr, include=FALSE}
+library('BiocStyle')
+options(bitmapType='cairo')
+set.seed(1996)
+knitr::opts_chunk$set( autodep=TRUE, cache=TRUE, cache.lazy=FALSE, dev='png' )
+knitr::opts_knit$set( root.dir='..' )
+# wflow_build(files='analysis/00_initial_eda.Rmd', view=F, verbose=T, delete_cache=T)
+```
+
+```{r setup_libs, collapse=FALSE, message=FALSE, warning=FALSE, cache=TRUE}
+suppressMessages(source('code/R/dep.R')) 
+```
+
+## Helper functions
+
+```{r setup_helpers, message=FALSE, cache=TRUE}
+suppressMessages(source('code/R/utils.R')) 
+library("spatialLIBD")
+# source('code/R/sma01_eda.R')
+```
+
+## Paths
+
+```{r setup_input}
+tag       = '00_initial_eda' 
+# ref_tag   = 'embryo1_2'
+data_raw_dir  = 'data_raw'
+data_tidy_dir = 'data_tidy'
+out_dir   =  file.path('output', tag)
+
+decodes_dir = 'data_raw/decodes'
+decodes_f   = list.files(decodes_dir, full.names=TRUE)
+decodes_tags = decodes_f %>% 
+    purrr::map(~str_replace(.x, pattern='data_raw/decodes/', replacement='')) %>% 
+    purrr::map(~str_replace(.x, pattern='_DECODEv1.csv', replacement='')) %>% 
+    unlist
+names(decodes_f) = decodes_tags
+
+nodules_anno_dir = 'data_raw/nodule_annotations'
+nodules_anno_f   = list.files(nodules_anno_dir, full.names=TRUE)
+nodules_anno_tags = nodules_anno_f %>% 
+    purrr::map(~str_replace(.x, pattern='data_raw/nodule_annotations/', replacement='')) %>%
+    purrr::map(~str_replace(.x, pattern='\\.csv', replacement='')) %>%
+    unlist
+names(nodules_anno_f) = nodules_anno_tags
+
+
+samples_f     = list.dirs(data_raw_dir, recursive=FALSE) %>% str_subset('ML')
+samples_tags  = samples_f %>% purrr::map(~str_replace(.x, pattern='data_raw/', replacement='')) %>% unlist
+names(samples_f) = samples_tags
+
+obj_dir  = file.path('objects', tag)
+dir.create(obj_dir)
+obj_list = list()
+fig_dir  = file.path('output', tag)
+dir.create(fig_dir)
+fig_list = list()
+```
+
+
+## Load inputs
+
+```{r load_inputs, fig.height=8, fig.width=8, results='asis', cache=TRUE}
+remove_empty_spots <- function(spe){
+    spe = spe[,colSums(counts(spe)) != 0]
+    spe
+}
+
+remove_isolated_nodes <- function(ig){
+    Isolated = which(igraph::degree(ig)==0)
+    delete.vertices(ig, Isolated)
+}
+samples = samples_f %>% 
+    purrr::map(read10xVisium) %>%
+    purrr::map(remove_empty_spots) %>%
+    purrr::map(scuttle::logNormCounts)
+
+samples_raw = samples_f %>% 
+    purrr::map(read10xVisium) %>%
+    purrr::map(remove_empty_spots) %>%
+    purrr::map(scuttle::logNormCounts)
+
+hvgs = samples %>%
+    map(modelGeneVar) %>%
+    map(getTopHVGs) %>%
+    map(~ .x[1:1000]) %>%
+    purrr::reduce(intersect)
+
+
+decodes = decodes_f %>%
+    map(fread) 
+
+markers = c('Hnf4a', 'Krt19', 'Lrat', 'Eng', 'Ptprc', 'Adgre1', 'Csf1r', 'Ccr2', 'Itgax', 'Cd209a', 'Itgae', 'Siglech', 'Cd40', 'Cd86', 'Ngp', 'Ncr1', 'Gzma', 'Nkg7', 'Cd3d', 'Cd8a', 'Tcf7', 'Lef1', 'Gzmk', 'Mki67', 'Cd4', 'Tcrg-C1', 'Cd79a', 'Ms4a1')
+
+gene_data = rowData(samples[[1]])
+gene_data$ens_id = rownames(gene_data)
+rownames(gene_data) = gene_data$symbol
+marker_ens = gene_data[markers,]$ens_id
+
+sel_genes = c(hvgs, decodes[['Plasmid']]$ID, marker_ens) %>% unique  
+
+samples %<>% purrr::map(~.x[sel_genes,])
+
+nodules_anno = nodules_anno_f %>% 
+    map(fread) %>%
+    map(~setnames(.x, 2, 'nodule')) %>%
+    map(~.x[, nodule := ifelse(nodule != '', nodule, 'unassigned')])
+
+exprs_list = samples %>% 
+    # map(~.x[sel_genes,]) %>%
+    map(logcounts) %>%
+    map(as.matrix) %>%
+    map(~.x[rowSums(.x) != 0,]) 
+
+for(sample_tag in samples_tags){
+    rownames(exprs_list[[sample_tag]]) = rowData(samples[[sample_tag]])[rownames(exprs_list[[sample_tag]]),]
+}
+
+for(sample_tag in samples_tags){
+    sample_coldt = colData(samples[[sample_tag]]) %>% as.data.table
+    sample_coldt$Barcode = colnames(samples[[sample_tag]])
+    sample_coldt %<>% .[nodules_anno[[sample_tag]], on='Barcode']
+    sample_coldf = DataFrame(sample_coldt)
+    rownames(sample_coldf) = sample_coldt$Barcode
+    sample_coldf %<>% .[colnames(samples[[sample_tag]]),]
+    colData(samples[[sample_tag]]) = sample_coldf
+}
+
+shared_genes = exprs_list %>% map(rownames) %>% purrr::reduce(intersect)
+cons_adj = exprs_list %>%
+    map(~.x[shared_genes,]) %>%
+    map(t) %>%
+    map(data.table) %>%
+    map(~cov.wt(.x, method='ML')$cov) %>%
+    map(cov2cor) %>%
+    map(glasso::glasso, rho=0.1) %>%
+    map(~.x$wi) %>%
+    purrr::reduce(`+`) %>%
+    `/`(length(exprs_list))
+cons_adj_bin =  abs(cons_adj) > 0.075
+diag(cons_adj_bin ) = F
+rownames(cons_adj_bin ) = colnames(cons_adj_bin) = shared_genes
+cons_graph = graph_from_adjacency_matrix(cons_adj_bin) %>%
+    as.undirected %>%
+    remove_isolated_nodes
+# cons_graph = as.undirected(cons_graph)
+
+cons_mem = cons_graph %>%
+    cluster_louvain %>%
+    membership
+
+
+
+
+cons_lay = layout_nicely(cons_graph)
+graph_col_comm(
+    graph  = cons_graph, 
+    lay    = cons_lay, 
+    grp    = .palette1[cons_mem], 
+    title  = 'Consensus graph on all slides', 
+    labels = names(cons_mem)
+)
+
+add_genes = setdiff(markers, cons_mem)
+add_mem   = rep(max(cons_mem)+1, length(add_genes))
+names(add_mem) = add_genes
+cons_mem  = c(cons_mem, add_mem)
+
+gg = exprs_list %>%
+    map(t) %>%
+    map(get_network, rho = .1, threshold = .075) %>%
+    map(as.undirected) %>%
+    map(remove_isolated_nodes)
+
+
+memberships = gg %>%
+    map(cluster_louvain) %>%
+    map(membership)
+
+act_all_nodules  = samples_tags %>% 
+    map(~act_colors(t(exprs_list[[.x]]), samples[[.x]]$nodule))
+names(act_all_nodules) = samples_tags
+
+
+
+adata_q = zellkonverter::readH5AD('data_tidy/integrated_query_nodules_umapped.h5ad')
+
+col_dt_all = colData(adata_q) %>%
+    as.data.table %>% setkey('Barcode') %>% 
+    .[,c('Barcode', 'section', 'leiden_sagenet')]
+
+
+for(sample_tag in samples_tags){
+
+       print(sample_tag)
+       col_dt_1 = colData(samples[[sample_tag]]) %>% as.data.table %>% setkey('Barcode')
+       col_dt_2 = col_dt_all[section==sample_tag]
+        colData(samples[[sample_tag]]) = 
+            col_dt_2[col_dt_1, all=TRUE] %>%
+            .[, leiden_sagenet := ifelse(is.na(leiden_sagenet), 'normal', leiden_sagenet)] %>% 
+            DataFrame
+}
+
+act_all_leiden  = samples_tags %>% 
+    map(~act_colors(t(exprs_list[[.x]][names(cons_mem),]), samples[[.x]]$leiden_sagenet))
+names(act_all_leiden) = samples_tags
+
+# act_all_leiden  = samples_tags %>% 
+#     map(~act_colors(t(exprs_list[[.x]]), samples[[.x]]$leiden_sagenet))
+# names(act_all_leiden) = samples_tags
+
+# lay = layout_nicely(gg[[1]])
+
+# for(nodule in rownames(act_all_nodules)){
+#     graph_col_act(gg[[1]], act_all_nodules[nodule, names(V(gg[[1]]))], lay, sprintf('%s: %s', samples_tags[1], nodule))
+# }
+
+# graph_col_comm(
+#     graph  = gg[[1]], 
+#     lay    = lay, 
+#     grp    = .palette1[memberships[[1]]], 
+#     title  = 'GGM on ML_I', 
+#     labels = names(memberships[[1]])
+# )
+
+
+
+# samples_tags %>%
+#     map(~SingleCellExperiment(
+#         assays = list(counts=exprs_list[[.x]][shared_genes,]),
+#         colData = colData(samples[[.x]]),
+#         # rowData = rowData(samples[[.x]]),
+#         metadata = list(adj = cons_adj_bin * 1, adj_local=as_adjacency_matrix(gg[[.x]]))
+#     ) %>%
+#     writeH5AD(file = sprintf(file.path(data_tidy_dir, '%s/%s.h5ad'), tag, .x))
+# )
+
+
+# SingleCellExperiment(
+#         assays = list(counts=exprs_list[[1]][shared_genes,]),
+#         colData = colData(samples[[1]]),
+#         # rowData = rowData(samples[[1]]),
+#         metadata = list(adj = cons_adj_bin * 1, adj_local=as_adjacency_matrix(gg[[1]]))
+#     ) %>% writeH5AD('data_tidy/test.h5ad')
+# data_tidy/01_sagenet_integration/integrated_query_umapped.h5ad
+
+# for(mem in unique(cons_mem)){
+#     gene_list = names(which(cons_mem == mem))
+#     res = enrichr(genes = gene_list, databases = "PanglaoDB_Augmented_2021")[[1]]
+
+#     par(mfrow = c(1, 1), mar = c(3, 25, 2, 1))
+#     barplot(height = -log10(res$P.value)[5:1], names.arg = res$Term[5:1],
+#         horiz = TRUE, las = 1, border = FALSE, cex.names = 0.6)
+#     abline(v = c(-log10(0.05)), lty = 2)
+#     abline(v = 0, lty = 1)
+# }
+
+
+
+
+
+```
+
+# Analysis
+
+
+## Integrated space{.tabset}
+
+
+```{r sp_combined, message=FALSE, warning=FALSE, fig.height=8, fig.width=18, results='asis', cache=TRUE}
+
+
+
+
+umap = reducedDim(adata_q, 'X_umap')
+p_umap1 = plot_2d(umap, adata_q$section, label_cols=.palette3, label_title='sample') 
+p_umap2 = plot_2d(umap, adata_q$leiden_sagenet, label_cols=.palette2, label_title='(integrated) nodule') 
+p = p_umap1 + p_umap2
+
+# umap_sagenet = reducedDim(adata_q, 'X_umap_sagenet')
+# p_umap_sagenet = plot_2d(umap_sagenet, adata_q$section, label_cols=.palette_all) + ggtitle('SageNet')
+
+# p_umap_sagenet_clus = plot_2d(umap_sagenet, factor(adata_q$leiden_sagenet), label_cols=.palette_all) + ggtitle('SageNet')
+
+
+# p = p_umap + p_umap_sagenet + p_umap_sagenet_clus + plot_layout(ncol = 3, guides='collect')
+
+print(p)
+
+
+```
+
+
+## Spatial maps{.tabset}
+
+```{r sp_all, message=FALSE, warning=FALSE, fig.height=8, fig.width=17, results='asis', cache=TRUE}
+
+leiden_cols = .palette2[as.numeric(as.factor(unique(adata_q$leiden_sagenet)))]
+        names(leiden_cols) = unique(adata_q$leiden_sagenet)
+leiden_cols = c(leiden_cols, c('normal' = '#999999'))
+
+for(sample_tag in samples_tags){
+
+    
+
+    cat('### ', sample_tag, '{.tabset}\n')
+
+
+        cols = .palette_all[as.numeric(as.factor(unique(samples[[sample_tag]]$nodule)))]
+        names(cols) = unique(samples[[sample_tag]]$nodule)
+
+        
+
+        p_vis_nodule = vis_clus(
+            spe = samples[[sample_tag]],
+            clustervar = "nodule",
+            colors = cols, 
+            size=4,
+            alpha=0.8,
+            sample_id ='initial annotation',
+        )  + ggtitle(sample_tag) + theme(legend.position='none') 
+
+        p_vis_leiden = vis_clus(
+            spe = samples[[sample_tag]],
+            clustervar = "leiden_sagenet",
+            colors = leiden_cols, 
+            size=4,
+            alpha=0.8,
+            sample_id ='unified annotation',
+        )  + ggtitle('unified annotation') 
+       
+
+        p = p_vis_nodule + p_vis_leiden  + plot_layout(ncol = 2, guides='collect')
+
+        print(p)
+    
+    cat('\n\n')
+
+}
+
+
+
+```
+
+
+
+
+## Expression heatmaps of gene modules and nodules{.tabset}
+
+Gene modules come from the Consensus graph. Expression values computed on each slide separately.
+
+
+### Unified annotation{.tabset}
+
+```{r hm_unified, message=FALSE, warning=FALSE, fig.height=22, fig.width=10, results='asis', cache=TRUE}
+
+for(sample_tag in samples_tags){
+
+    act_leiden = act_all_leiden[[sample_tag]]
+    act_leiden = act_leiden[,names(cons_mem)]
+
+    cat('#### ', sample_tag, '{.tabset}\n')
+        mtx = t(act_leiden)
+        col_cols = leiden_cols[rownames(act_leiden)]
+        names(col_cols) = rownames(act_leiden)
+        col_annots  = HeatmapAnnotation(
+            group                = rownames(act_leiden), 
+            col                  = list(group  = col_cols),
+            annotation_name_side = 'left', 
+            show_legend          = c(group=FALSE)
+        )
+
+        row_cols = .palette1[cons_mem]
+        names(row_cols) = cons_mem
+        # names(row_cols) = comm_dt$community
+        row_annots  = rowAnnotation(
+            gene_module          = cons_mem, 
+            col                  = list(gene_module  = row_cols),
+            show_legend          = c(gene_module=FALSE)
+        )
+
+        grp_vals  = seq(min(mtx), max(mtx), length.out=9)
+        grp_cols  = circlize::colorRamp2(grp_vals, viridis::viridis(9))
+        if(dim(as.matrix(mtx))[2] > 1){
+            seriate_obj  = seriate(as.matrix(mtx - min(mtx)), method = "BEA_TSP")
+            row_order    = get_order(seriate_obj, 1)
+            column_order = get_order(seriate_obj, 2)
+        }else{
+            row_order    = 1:length(mtx)
+            column_order = 1
+        }
+
+        # do heatmap for these genes
+        hm_obj      = Heatmap(
+            matrix=mtx, col=grp_cols,
+            row_order=row_order, 
+            cluster_rows=TRUE, cluster_columns=TRUE,
+            row_names_gp=gpar(fontsize = 8), column_names_gp=gpar(fontsize = 10),
+            name="Scaled\nGene Expression", 
+            row_names_side="left",
+            column_names_side="top",
+            row_split=cons_mem,
+            cluster_column_slices=FALSE,
+            top_annotation=col_annots, left_annotation=row_annots
+            )
+        draw(hm_obj)
+    
+    
+    cat('\n\n')
+
+}
+```
+
+### Preliminary annotation{.tabset}
+
+```{r hm_all, message=FALSE, warning=FALSE, fig.height=22, fig.width=10, results='asis', cache=TRUE}
+
+for(sample_tag in samples_tags){
+
+    act_nodule = act_all_nodules[[sample_tag]]
+    act_nodule = act_nodule[,names(cons_mem)]
+
+    cat('#### ', sample_tag, '{.tabset}\n')
+        mtx = t(act_nodule)
+        col_cols = .palette_all[1:nrow(act_nodule)]
+        names(col_cols) = rownames(act_nodule)
+        col_annots  = HeatmapAnnotation(
+            group                = rownames(act_nodule), 
+            col                  = list(group  = col_cols),
+            annotation_name_side = 'left', 
+            show_legend          = c(group=FALSE)
+        )
+
+        row_cols = .palette1[cons_mem]
+        names(row_cols) = cons_mem
+        # names(row_cols) = comm_dt$community
+        row_annots  = rowAnnotation(
+            gene_module          = cons_mem, 
+            col                  = list(gene_module  = row_cols),
+            show_legend          = c(gene_module=FALSE)
+        )
+
+        grp_vals  = seq(min(mtx), max(mtx), length.out=9)
+        grp_cols  = circlize::colorRamp2(grp_vals, viridis::viridis(9))
+        if(dim(as.matrix(mtx))[2] > 1){
+            seriate_obj  = seriate(as.matrix(mtx - min(mtx)), method = "BEA_TSP")
+            row_order    = get_order(seriate_obj, 1)
+            column_order = get_order(seriate_obj, 2)
+        }else{
+            row_order    = 1:length(mtx)
+            column_order = 1
+        }
+
+        # do heatmap for these genes
+        hm_obj      = Heatmap(
+            matrix=mtx, col=grp_cols,
+            row_order=row_order, 
+            cluster_rows=TRUE, cluster_columns=TRUE,
+            row_names_gp=gpar(fontsize = 8), column_names_gp=gpar(fontsize = 10),
+            name="Scaled\nGene Expression", 
+            row_names_side="left",
+            column_names_side="top",
+            row_split=cons_mem,
+            cluster_column_slices=FALSE,
+            top_annotation=col_annots, left_annotation=row_annots
+            )
+        draw(hm_obj)
+    
+    
+    cat('\n\n')
+
+}
+```
+
+## Separated gene interaction graphs{.tabset}
+```{r ggm_sep_new, fig.height=8, fig.width=8, results='asis', cache=TRUE}
+for(sample_tag in samples_tags){
+
+    # lay = layout_nicely(gg[[sample_tag]])
+
+    cat('### ', sample_tag, '{.tabset}\n')
+
+    # cat('#### gene interaction network{.tabset}\n')
+    #     cat('##### \n')
+    #     graph_col_comm(
+    #         graph  = gg[[sample_tag]], 
+    #         lay    = lay, 
+    #         grp    = .palette1[memberships[[sample_tag]]], 
+    #         title  = sprintf('gene interaction network on %s', sample_tag),
+    #         labels = names(memberships[[sample_tag]])
+    #     )
+    #     cat('\n\n')
+    # cat('\n\n')
+
+    cat('#### gene activities{.tabset}\n')
+
+    for(l in sort(rownames(act_all_leiden[[sample_tag]]))){
+        cat('##### ', l, '\n')
+        pp = graph_col_act(cons_graph, act_all_leiden[[sample_tag]][l, names(V(cons_graph))], cons_lay, sprintf('%s: %s', sample_tag, l))
+        print(pp)
+        cat('\n\n')
+    }
+
+    cat('\n\n')
+    
+    
+    cat('\n\n')
+
+}
+```
+
+
+
+## Separated gene interaction graphs{.tabset}
+```{r ggm_sep, fig.height=8, fig.width=8, results='asis', cache=TRUE}
+for(sample_tag in samples_tags){
+
+    lay = layout_nicely(gg[[sample_tag]])
+
+    cat('### ', sample_tag, '{.tabset}\n')
+
+    cat('#### gene interaction network{.tabset}\n')
+        cat('##### \n')
+        graph_col_comm(
+            graph  = gg[[sample_tag]], 
+            lay    = lay, 
+            grp    = .palette1[memberships[[sample_tag]]], 
+            title  = sprintf('gene interaction network on %s', sample_tag),
+            labels = names(memberships[[sample_tag]])
+        )
+        cat('\n\n')
+    cat('\n\n')
+
+    cat('#### gene activities{.tabset}\n')
+    cat('##### jojo\n')
+    pp = graph_col_act(cons_graph, act_all_nodules[[sample_tag]][1, names(V(cons_graph))], lay, sprintf('%s: %s', sample_tag, 'test'))
+        print(pp)
+    cat('\n\n') 
+
+    for(nodule in rownames(act_all_nodules[[sample_tag]])){
+        cat('##### ', nodule, '\n')
+        pp = graph_col_act(cons_graph, act_all_nodules[[sample_tag]][nodule, names(V(cons_graph))], lay, sprintf('%s: %s', sample_tag, nodule))
+        print(pp)
+        cat('\n\n')
+    }
+
+    cat('\n\n')
+    
+    
+    cat('\n\n')
+
+}
+```
+
+
+# Outputs
+
+```{r save_outputs}
+```
+
+```{r session_info, include=TRUE, echo=TRUE, results='markup'}
+devtools::session_info()
+```

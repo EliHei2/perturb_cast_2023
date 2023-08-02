@@ -1,0 +1,138 @@
+<!-- 
+#### On spatial graph communities {.tabset}
+```{r act_all_comms, fig.height=5, fig.width=5, results='asis', cache=FALSE}
+for (t in unique(metadata$nncomm)){
+    cat('##### ', t, '\n')
+        graph_col_act(graph_all$graph, act_all_comms[t,], graph_all$lay, '')
+    cat('\n\n')
+}
+```
+
+### Expression heatmap{.tabset} 
+
+#### On cell types
+
+```{r hm_all_type, fig.height=25, fig.width=10, results='asis', cache=FALSE}
+col_dt = data.table(
+    ID    = rownames(act_all_types), 
+    group = rownames(act_all_types),
+    color = celltype_colours[rownames(act_all_types)]) %>%
+    setkey(ID)
+hm = hm_col_act(
+    mtx     = act_all_types, 
+    comm_dt = graph_all$comm_dt,
+    col_dt  = col_dt
+) 
+draw(hm)
+```
+
+#### On spatial graph communities
+```{r hm_all_comm, fig.height=25, fig.width=15, results='asis', cache=FALSE}
+col_dt = data.table(
+    ID    = rownames(act_all_comms), 
+    group = rownames(act_all_comms),
+    color = nice_cols[as.numeric(factor(rownames(act_all_comms), ordered=T))]) %>%
+    setkey(ID)
+hm = hm_col_act(
+    mtx     = act_all_comms, 
+    comm_dt = graph_all$comm_dt,
+    col_dt  = col_dt
+) 
+draw(hm)
+```
+
+
+## GGM on the embryo sections (functional annotation){.tabset}
+```{r ggm_embryo_graph, fig.height=11, fig.width=11 , collapse=FALSE, message=FALSE, warning=FALSE, cache=FALSE, results='asis'}
+for(t in levels(factor(metadata$embryo, ordered=TRUE))){
+    cat('### ', t, '\n')
+        gg = graph_col_comm(
+            graph  = graphs[[t]]$graph, 
+            lay    = graphs[[t]]$lay, 
+            grp    = graphs[[t]]$comm_dt$color, 
+            sz     = 5, 
+            title  = 'GGM on %s', 
+            labels = graphs[[t]]$comm_dt$GENE
+        )
+    cat('\n\n')
+
+}
+```
+
+
+##
+
+
+### Expression graphs{.tabset}
+
+#### On cell types{.tabset}
+```{r act_embryo_type, fig.height=5, fig.width=5, results='asis', cache=FALSE}
+for (t in levels(factor(metadata$embryo, ordered=TRUE))){
+    cat('##### ', t, '{.tabset}\n')
+        for (l in unique(meta_list[[t]]$celltype_mapped_refined)){
+            cat('###### ', l, '\n')
+                graph_col_act(graphs[[t]]$graph, act_embryo_type[[t]][l,], graphs[[t]]$lay, '')
+            cat('\n\n')
+        }
+    cat('\n\n')
+}
+```
+
+
+#### On spatial graph communities{.tabset}
+```{r act_embryo_comm, fig.height=5, fig.width=5, results='asis', cache=FALSE}
+for (t in levels(factor(metadata$embryo, ordered=TRUE))){
+    cat('##### ', t, '{.tabset}\n')
+        for (l in unique(meta_list[[t]]$nncomm)){
+            cat('###### ', l, '\n')
+                graph_col_act(graphs[[t]]$graph, act_embryo_comm[[t]][l,], graphs[[t]]$lay, '')
+            cat('\n\n')
+        }
+    cat('\n\n')
+}
+```
+
+##
+
+### Expression heatmaps{.tabset}
+
+#### On cell types{.tabset}
+```{r hm_embryo_type, fig.height=25, fig.width=8, results='asis', cache=FALSE}
+for(t in levels(factor(metadata$embryo, ordered=TRUE))){
+    cat('##### ', t, '\n')
+        col_dt = data.table(
+            ID    = rownames(act_embryo_type[[t]]), 
+            group = rownames(act_embryo_type[[t]]),
+            color = celltype_colours[rownames(act_embryo_type[[t]])]) %>%
+            setkey(ID)
+        hm = hm_col_act(
+            mtx      = act_embryo_type[[t]], 
+            comm_dt  = graphs[[t]]$comm_dt,
+            col_dt   = col_dt
+        ) 
+        draw(hm)
+    cat('\n\n')
+}
+
+```
+
+#### On spatial graph communities{.tabset}
+```{r hm_embryo_comm, fig.height=25, fig.width=5, results='asis', cache=FALSE}
+for(t in levels(factor(metadata$embryo, ordered=TRUE))){
+    cat('##### ', t, '\n')
+        col_dt = data.table(
+            ID    = rownames(act_embryo_comm[[t]]), 
+            group = rownames(act_embryo_comm[[t]]),
+            color = nice_cols[as.numeric(factor(rownames(act_embryo_comm[[t]]), ordered=T))]) %>%
+            setkey(ID)
+        hm = hm_col_act(
+            mtx      = act_embryo_comm[[t]], 
+            comm_dt  = graphs[[t]]$comm_dt,
+            col_dt   = col_dt,
+            cluster_columns=TRUE
+        ) 
+        draw(hm)
+    cat('\n\n')
+}
+```
+ -->
